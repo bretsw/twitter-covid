@@ -1,0 +1,314 @@
+---
+title: "Script for using the Academic Twitter API to Collect Tweets During COVID-19"
+author: "K. Bret Staudt Willet"
+date: "`r Sys.time()`"
+---
+
+# Get set up
+
+This section loads the data and packages and starts to process the data.
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(anytime)
+library(lubridate)
+library(beepr)
+
+#devtools::install_github("cjbarrie/academictwitteR")
+library(academictwitteR)
+
+#devtools::install_github("bretsw/tidytags")
+library(tidytags)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE)
+usethis::use_git_ignore(c("*.csv", "*.rds", "*.log", "*.json"))
+```
+
+```{r, eval=FALSE}
+tweets_edchat <- 
+        academictwitteR::get_all_tweets(
+                query = "#edchat",  # this query is not case sensitive
+                n = 1500000,
+                page_n = 500,
+                start_tweet = "2019-01-01T00:00:00Z", 
+                end_tweets = "2019-09-01T00:00:00Z", 
+                bearer_token = Sys.getenv("TWITTER_BEARER_TOKEN"), 
+                data_path = "Edchat-data-2019/"
+                )
+beepr::beep(8)
+```
+
+```{r, eval=FALSE}
+tweets_ukedchat <- 
+        academictwitteR::get_all_tweets(
+                query = "#ukedchat",  # this query is not case sensitive
+                n = 1000000,
+                page_n = 500,
+                start_tweet = "2019-01-01T00:00:00Z", 
+                end_tweets = "2021-09-01T00:00:00Z", 
+                bearer_token = Sys.getenv("TWITTER_BEARER_TOKEN"), 
+                data_path = "UKedchat-data/"
+                )
+beepr::beep(8)
+```
+
+```{r, eval=FALSE}
+tweets_loaded <- 
+        academictwitteR::bind_tweets(data_path = "UKedchat-data/", 
+                                     output_format = "tidy")
+beepr::beep(8)
+```
+
+```{r, eval=FALSE}
+#ukedchat_ids <- tweets_loaded %>% select(tweet_id)
+#write_csv(ukedchat_ids, file = "ukedchat-ids.csv")
+ukedchat_ids_reloaded <- read_csv("ukedchat-ids.csv", col_types = 'c')
+```
+
+```{r, eval=FALSE}
+ukedchat_tweets <- 
+        tidytags::lookup_many_tweets(ukedchat_ids_reloaded$tweet_id)
+
+saveRDS(ukedchat_tweets, "ukedchat-tweets.Rds")
+```
+
+# Now, look at \#Edchat tweets
+
+```{r, eval=FALSE}
+edchat_ids_reloaded <- read_csv("edchat-ids-all.csv", col_types = 'c')
+
+ids1 <- edchat_ids_reloaded$tweet_id[1:900000]
+ids2 <- edchat_ids_reloaded$tweet_id[900001:1800000]
+ids3 <- edchat_ids_reloaded$tweet_id[1800001:nrow(edchat_ids_reloaded)]
+
+rm(edchat_ids_reloaded)
+```
+
+```{r, eval=FALSE}
+edchat_tweets1 <- tidytags::lookup_many_tweets(ids1)
+saveRDS(edchat_tweets1, "edchat-tweets1.Rds")
+rm(edchat_tweets1)
+
+edchat_tweets2 <- tidytags::lookup_many_tweets(ids2)
+saveRDS(edchat_tweets2, "edchat-tweets2.Rds")
+rm(edchat_tweets2)
+
+edchat_tweets3 <- tidytags::lookup_many_tweets(ids3)
+saveRDS(edchat_tweets3, "edchat-tweets3.Rds")
+rm(edchat_tweets3)
+
+beepr::beep(8)
+```
+
+# Analysis
+
+```{r}
+start_date_pre_covid <- 
+  as_datetime("2019-01-01 05:00:00 UTC") %>% 
+  ymd_hms() %>%
+  with_tz(tzone = "US/Eastern")
+end_date_pre_covid <- 
+  as_datetime("2020-03-01 04:59:59 UTC") %>% 
+  ymd_hms() %>%
+  with_tz(tzone = "US/Eastern")
+start_date_covid <- 
+  as_datetime("2020-03-01 05:00:00 UTC") %>% 
+  ymd_hms() %>%
+  with_tz(tzone = "US/Eastern")
+end_date_covid <- 
+  as_datetime("2021-05-01 03:59:59 UTC") %>% 
+  ymd_hms() %>%
+  with_tz(tzone = "US/Eastern")
+```
+
+
+```{r}
+ukedchat_tweets0 <- readRDS("ukedchat-tweets.Rds")
+```
+
+```{r}
+ukedchat_tweets <-  
+        ukedchat_tweets0 %>%
+        mutate(created_at = created_at %>% 
+                       as.numeric() %>% 
+                       anytime(asUTC = TRUE) %>% 
+                       as_datetime %>%
+                       ymd_hms() %>%
+                       with_tz(tzone = "US/Eastern")
+        ) %>%
+        filter(created_at >= start_date_pre_covid,
+               created_at <= end_date_covid) %>%
+        mutate(group = ifelse(created_at <= end_date_pre_covid,
+                              'pre',
+                              'during'),
+               has_question = ifelse(grepl("\\? ", text), TRUE, FALSE),
+               date = floor_date(created_at, 'day')
+        )
+rm(ukedchat_tweets0)
+```
+
+```{r, message=FALSE}
+ukedchat_dates <- ukedchat_tweets %>% count(date)
+
+ggplot(ukedchat_dates, aes(x = date, y = n)) +
+        geom_point() + 
+        geom_smooth() +
+        geom_vline(aes(xintercept = as.POSIXct("2020-03-11")),
+                   color = 'red') + 
+        xlab(NULL) +
+        ylab("Number of Tweets") +
+        ggtitle("#UKEdChat tweets") +
+        theme_bw()
+```
+
+```{r, include=FALSE}
+ggsave(file="output/ukedchat-all.png", width=8, height=4.5)
+```
+
+```{r}
+ukedchat_tweets %>% 
+        filter(!is_retweet,
+               has_question) %>%
+        count(group)
+```
+
+```{r, message=FALSE}
+ukedchat_dates_q <- 
+        ukedchat_tweets %>% 
+        filter(!is_retweet,
+               has_question) %>%
+        count(date)
+
+ggplot(ukedchat_dates_q, aes(x = date, y = n)) +
+        geom_point() + 
+        geom_smooth() +
+        geom_vline(aes(xintercept = as.POSIXct("2020-03-11")),
+                   color = 'red') + 
+        xlab(NULL) +
+        ylab("Number of Question Tweets") +
+        ggtitle("#UKEdChat question tweets") +
+        theme_bw()
+```
+
+```{r, include=FALSE}
+ggsave(file="output/ukedchat-questions.png", width=8, height=4.5)
+```
+
+```{r}
+edchat_tweets1 <- readRDS("edchat-tweets1.Rds")
+edchat_tweets2 <- readRDS("edchat-tweets2.Rds")
+edchat_tweets3 <- readRDS("edchat-tweets3.Rds")
+```
+
+```{r}
+edchat_tweets0 <-
+  edchat_tweets1 %>%
+  bind_rows(edchat_tweets2) %>%
+  bind_rows(edchat_tweets3)
+
+rm(edchat_tweets1)
+rm(edchat_tweets2)
+rm(edchat_tweets3)
+```
+
+```{r}
+edchat_tweets <-  
+        edchat_tweets0 %>%
+        mutate(created_at = created_at %>% 
+                       as.numeric() %>% 
+                       anytime(asUTC = TRUE) %>% 
+                       as_datetime %>%
+                       ymd_hms() %>%
+                       with_tz(tzone = "US/Eastern")
+        ) %>%
+        filter(created_at >= start_date_pre_covid,
+               created_at <= end_date_covid) %>%
+        mutate(group = ifelse(created_at <= end_date_pre_covid,
+                              'pre',
+                              'during'),
+               has_question = ifelse(grepl("\\? ", text), TRUE, FALSE),
+               date = floor_date(created_at, 'day')
+        )
+rm(edchat_tweets0)
+```
+
+```{r, message=FALSE}
+edchat_dates <- edchat_tweets %>% count(date)
+
+ggplot(edchat_dates, aes(x = date, y = n)) +
+        geom_point() + 
+        geom_smooth() +
+        geom_vline(aes(xintercept = as.POSIXct("2020-03-11")),
+                   color = 'green') + 
+        xlab(NULL) +
+        ylab("Number of Tweets") +
+        ggtitle("#Edchat tweets") +
+        theme_bw()
+```
+
+```{r, include=FALSE}
+ggsave(file="output/edchat-all.png", width=8, height=4.5)
+```
+
+```{r}
+edchat_tweets %>% 
+  filter(!is_retweet,
+         has_question) %>%
+  count(group)
+```
+
+```{r, message=FALSE}
+edchat_dates_by_type <- 
+  edchat_tweets %>% 
+  count(date, is_retweet) %>%
+  mutate(type = ifelse(is_retweet, 
+                       'retweets', 
+                       'original tweets')
+         )
+
+ggplot(edchat_dates_by_type, aes(x = date, y = n, color = type)) +
+  geom_point() + 
+  geom_smooth() +
+  scale_colour_brewer(palette = "Set1") +
+  geom_vline(aes(xintercept = as.POSIXct("2020-03-11")),
+             color = 'green') + 
+  
+  xlab(NULL) +
+  ylab("Number of Tweets") +
+  ggtitle("#Edchat tweets") +
+  theme_bw()
+```
+
+```{r, include=FALSE}
+ggsave(file="output/edchat-by-type.png", width=8, height=4.5)
+```
+
+```{r}
+edchat_dates_q <- 
+        edchat_tweets %>% 
+        filter(!is_retweet,
+               has_question) %>%
+        count(date)
+
+ggplot(edchat_dates_q, aes(x = date, y = n)) +
+        geom_point() + 
+        geom_smooth() +
+        geom_vline(aes(xintercept = as.POSIXct("2020-03-11")),
+                   color = 'green') + 
+        xlab(NULL) +
+        ylab("Number of Question Tweets") +
+        ggtitle("#Edchat question tweets") +
+        theme_bw()
+```
+
+```{r, include=FALSE}
+ggsave(file="output/edchat-questions.png", width=8, height=4.5)
+```
+
+# Version/dependencies
+
+```{r session-info}
+sessionInfo()
+```
